@@ -121,7 +121,7 @@ const userSchema = new Schema({
     },
     branch:{
         type: String,
-        enum:['sales','tech','hr',],
+        enum:['sales','tech','hr','telecaller'],
         trim: true
     },
     desgination:{

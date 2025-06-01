@@ -9,7 +9,7 @@ const LeadSchema = new Schema({
   address: String,
   District:String,
   State:String,
-  result: { type: String, enum: ['Pass', 'Fail','Pending'], default: null },
+  result: { type: String, enum: ['Pass', 'Fail','Pending','Assigned'], default: null },
   duration: String,
   interest: { type: String, enum: ['Medium','Low', 'Hot', 'Cold','Warm'], default: null },
   reminder: Date,

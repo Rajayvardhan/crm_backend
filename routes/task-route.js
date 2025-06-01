@@ -25,6 +25,7 @@ router.post("/meetings/create", taskController.createMeeting);
 router.get("/meetings/today/:id", taskController.getTodayMeetingsByEmployee);
 router.post('/events', eventUpload.single('image'), taskController.createEvent);
 router.get("/events/:date", taskController.getEventsByDate);
+router.get("/filterDeals", taskController.getFilteredDeals);
 
 // router.get('/user-history/:id', taskController.getUserHistoryTasks);
 

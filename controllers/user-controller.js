@@ -10,6 +10,8 @@ const pdf2img = require('pdf2img'); // For converting PDF to image
 const { convert } = require('html-to-text');
 const UserModel = require('../models/user-model');
 const nodeMailer = require('nodemailer');
+const bcrypt = require('bcrypt');
+
 
 
 const fs = require('fs');
@@ -267,99 +269,106 @@ class UserController {
     }
     
 
-    
     markInAttendance = async (req, res, next) => {
-  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+      try {
+        const { employeeID } = req.body;
+        const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        const now = new Date();
+    
+        // Holiday check
+        if (attendanceService.isHoliday(now)) {
+          return next(ErrorHandler.notAllowed("Today is a holiday. Attendance not allowed."));
+        }
+    
+        const attendanceData = {
+          employeeID,
+          year: now.getFullYear(),
+          month: now.getMonth() + 1,
+          date: now.getDate(),
+          day: days[now.getDay()],
+        };
+    
+        const alreadyMarked = await attendanceService.findAttendance(attendanceData);
+        if (alreadyMarked && alreadyMarked.inTime) {
+          return next(ErrorHandler.notAllowed("IN Time already marked."));
+        }
+    
+        const newAttendance = {
+          ...attendanceData,
+          inTime: now,
+          present: "Approvel",
+          inApproved: "Pending", // Reception approval pending
+        };
+    
+        const result = await attendanceService.markAttendance(newAttendance);
+        if (!result) return next(ErrorHandler.serverError("Failed to mark IN time"));
+    
+        res.json({
+          success: true,
+          message: "IN time marked and sent to Reception for approval",
+          newAttendance: result,
+        });
+      } catch (error) {
+        console.error("Error in markEmployeeAttendance:", error); // This will log full error on server
+        res.status(500).json({
+            success: false,
+            message: error.message || "Internal Server Error",
+            stack: error.stack, // optional: remove in production
+        });
+      }
+    };
+    
+   // 🔹 markOutAttendance (Modified)
+ markOutAttendance = async (req, res, next) => {
   try {
     const { employeeID } = req.body;
     const now = new Date();
 
-    if (attendanceService.isHoliday(now)) {
-      return next(ErrorHandler.notAllowed("Today is a holiday. Attendance not allowed."));
-    }
-
-    const attendanceData = {
-      employeeID,
-      year: now.getFullYear(),
-      month: now.getMonth() + 1,
-      date: now.getDate(),
-      day: days[now.getDay()],
-    };
-
-    const existing = await attendanceService.findAttendance(attendanceData);
-    if (existing && existing.inTime) {
-      return next(ErrorHandler.notAllowed("IN time already marked."));
-    }
-
-    const newAttendance = {
-      ...attendanceData,
-      inTime: now,
-      inApproved: false,
-      present: 'Absent', // default until approved
-    };
-
-    const result = await attendanceService.markAttendance(newAttendance);
-    if (!result) return next(ErrorHandler.serverError("Failed to mark IN time"));
-
-    res.json({
-      success: true,
-      message: "IN time marked and sent to Reception for approval",
-      newAttendance: result,
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message, stack: error.stack });
-  }
-};
-
-markOutAttendance = async (req, res, next) => {
-  try {
-    const { employeeID } = req.body;
-    const now = new Date();
-
-    const query = {
+    const attendanceQuery = {
       employeeID,
       year: now.getFullYear(),
       month: now.getMonth() + 1,
       date: now.getDate(),
     };
 
-    const attendance = await attendanceService.findAttendance(query);
+    const attendance = await attendanceService.findAttendance(attendanceQuery);
 
     if (!attendance || !attendance.inTime) {
       return next(ErrorHandler.notAllowed("IN time not marked yet."));
     }
 
     const inTime = new Date(attendance.inTime);
-    const workedHours = (now - inTime) / (1000 * 60 * 60);
+    const duration = (now - inTime) / (1000 * 60 * 60);
 
-    if (workedHours < 8) {
-      const remaining = 8 - workedHours;
+    if (duration < 8) {
+      const remaining = 8 - duration;
       const h = Math.floor(remaining);
       const m = Math.round((remaining - h) * 60);
 
       return res.json({
         success: false,
-        status: 300,
+        status:300,
         message: `You still have ${h}h ${m}m remaining. Do you want to regularize?`,
         needRegularize: true,
       });
     }
 
     attendance.outTime = now;
-    attendance.outApproved = false;
+    attendance.outApproved = true;
     await attendance.save();
 
     res.json({
       success: true,
-      message: "OUT time marked successfully",
+      message: "OUT marked successfully",
       newAttendance: attendance,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.json({ success: false, error });
   }
 };
 
-regularizeAttendanceRequest = async (req, res, next) => {
+// 🔹 regularizeAttendanceRequest (OUT)
+ regularizeAttendanceRequest = async (req, res, next) => {
   try {
     const { employeeID, regularizeReason } = req.body;
     const now = new Date();
@@ -372,6 +381,7 @@ regularizeAttendanceRequest = async (req, res, next) => {
     };
 
     const attendance = await attendanceService.findAttendance(query);
+
     if (!attendance || attendance.outTime) {
       return next(ErrorHandler.notAllowed("OUT already marked or no IN found."));
     }
@@ -381,7 +391,6 @@ regularizeAttendanceRequest = async (req, res, next) => {
     attendance.regularized = true;
     attendance.regularizeType = "OUT";
     attendance.regularizeReason = regularizeReason;
-    attendance.present = "Absent"; // ✅ Mandatory for HR review
 
     await attendance.save();
 
@@ -391,109 +400,112 @@ regularizeAttendanceRequest = async (req, res, next) => {
       newAttendance: attendance,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.json({ success: false, error });
   }
 };
 
-getAllOutRegularizeRequests = async (req, res, next) => {
+// 🔹 getAllOutRegularizeRequests (for HR panel)
+ getAllOutRegularizeRequests = async (req, res, next) => {
   try {
-    const { year, month, date } = req.query; // optional query params
-
     const filter = {
       regularized: true,
       regularizeType: "OUT",
       outApproved: false,
     };
 
-    if (year) filter.year = parseInt(year);
-    if (month) filter.month = parseInt(month);
-    if (date) filter.date = parseInt(date);
-
     const resp = await attendanceService.findAllAttendance(filter);
-
     if (!resp || resp.length === 0) {
       return next(ErrorHandler.notFound("No pending OUT regularize requests"));
     }
 
     res.json({ success: true, data: resp });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.json({ success: false, error });
   }
 };
-
-getAllTodayInRequests = async (req, res, next) => {
-  try {
-    const { year, month, date } = req.query;
-    const today = new Date();
-
-    const filter = {
-      year: parseInt(year) || today.getFullYear(),
-      month: parseInt(month) || today.getMonth() + 1,
-      date: parseInt(date) || today.getDate(),
-      inApproved: false,
-    };
-
-    const resp = await attendanceService.findAllAttendance(filter);
-
-    if (!resp || resp.length === 0) {
-      return next(ErrorHandler.notFound('No IN Requests found for selected date'));
+    getAllTodayInRequests = async (req, res, next) => {
+      console.log("hittttt");
+      
+      try {
+          const today = new Date();
+  
+          const filter = {
+              year: today.getFullYear(),
+              month: today.getMonth() + 1,
+              date: today.getDate(),
+              inApproved:"Pending"
+          };
+  
+          const resp = await attendanceService.findAllAttendance(filter);
+          if (!resp) return next(ErrorHandler.notFound('No IN Requests found for today'));
+  
+          res.json({ success: true, data: resp });
+  
+      }  catch (error) {
+        console.error("Error in markEmployeeAttendance:", error); // This will log full error on server
+        res.status(500).json({
+            success: false,
+            message: error.message || "Internal Server Error",
+            stack: error.stack, // optional: remove in production
+        });
+      }
+   }
+   approveInRequest = async (req, res, next) => {
+    try {
+      const { attendanceID, present, type } = req.body;
+  
+      if (!attendanceID || !present || !type) {
+        return next(ErrorHandler.badRequest('Attendance ID, type, and present value are required'));
+      }
+  
+      const allowedPresent = ['Present', 'half-day', 'Absent'];
+      const allowedTypes = ['in', 'out'];
+  
+      if (!allowedPresent.includes(present)) {
+        return next(ErrorHandler.badRequest('Invalid present value'));
+      }
+  
+      if (!allowedTypes.includes(type)) {
+        return next(ErrorHandler.badRequest('Invalid type (must be "in" or "out")'));
+      }
+  
+      const updateFields = {
+        present,
+      };
+  
+      if (type === 'in') updateFields.inApproved = true;
+      else if (type === 'out') updateFields.outApproved = true;
+  
+      const updated = await attendanceService.updateAttendance(attendanceID, updateFields);
+  
+      if (!updated) return next(ErrorHandler.notFound('Attendance not found'));
+  
+      res.json({
+        success: true,
+        message: `${type.toUpperCase()} request marked as ${present}`,
+        data: updated
+      });
+    } catch (error) {
+      res.json({ success: false, error });
     }
-
-    res.json({ success: true, data: resp });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-
-approveInRequest = async (req, res, next) => {
-  try {
-    const { attendanceID, present, type } = req.body;
-
-    if (!attendanceID || !present || !type) {
-      return next(ErrorHandler.badRequest('Attendance ID, type, and present value are required'));
-    }
-
-    const allowedPresent = ['Present', 'Half-day', 'Absent'];
-    const allowedTypes = ['in', 'out'];
-
-    if (!allowedPresent.includes(present)) {
-      return next(ErrorHandler.badRequest('Invalid present value'));
-    }
-
-    if (!allowedTypes.includes(type)) {
-      return next(ErrorHandler.badRequest('Invalid type (must be "in" or "out")'));
-    }
-
-    const updateFields = { present };
-
-    if (type === 'in') updateFields.inApproved = true;
-    else if (type === 'out') updateFields.outApproved = true;
-
-    const updated = await attendanceService.updateAttendance(attendanceID, updateFields);
-    if (!updated) return next(ErrorHandler.notFound('Attendance not found'));
-
-    res.json({
-      success: true,
-      message: `${type.toUpperCase()} request marked as ${present}`,
-      data: updated
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
+  };
+  
+  
+    
+     
+    
 viewEmployeeAttendance = async (req, res, next) => {
   try {
     const { employeeID, year, month, date, fromDate, toDate, status } = req.body;
 
     let filter = {};
-
+    
     if (employeeID) filter.employeeID = employeeID;
     if (year) filter.year = year;
     if (month) filter.month = month;
     if (date) filter.date = date;
 
+    // ✅ Proper Date Range Filter (based on year/month/date fields)
     if (fromDate && toDate) {
       const from = new Date(fromDate);
       const to = new Date(toDate);
@@ -505,21 +517,23 @@ viewEmployeeAttendance = async (req, res, next) => {
       ];
     }
 
+    // 🔹 present status filter
     if (status && status !== "All") {
       filter.present = status;
     }
 
     const resp = await attendanceService.findAllAttendance(filter);
+
     if (!resp || resp.length === 0) {
       return next(ErrorHandler.notFound('No Attendance found'));
     }
 
     res.json({ success: true, data: resp });
+
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.json({ success: false, error });
   }
 };
-
 
     applyLeaveApplication = async (req, res, next) => {
         try {
@@ -725,7 +739,7 @@ assignletter = async (req, res, next) => {
       service: 'gmail',
       auth: {
         user: 'hr@7unique.in',
-        pass: 'bjtv ionr humz bhkx', // 🔐 Consider using env variable in production
+        pass: 'SEVEN@2241#', // 🔐 Consider using env variable in production
       },
     });
 

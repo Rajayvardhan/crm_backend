@@ -10,9 +10,9 @@ const Event = require('../models/Events');
 
 exports.createTaskWithLeads = async (req, res, next) => {
   try {
-    const { title, priority, Status, description, team, createdFor,assignedTo, createdBy } = req.body;
+    const { title, priority, Status, description, team, createdFor, assignedTo, createdBy } = req.body;
     const assignedBy = createdBy;
-    
+
 
     // 1. Create Task
     const task = await Task.create({ title, priority, description, team, assignedTo, Status, assignedBy });
@@ -74,44 +74,65 @@ exports.createTaskWithLeads = async (req, res, next) => {
 // Controller
 exports.getTodayTasks = async (req, res, next) => {
   try {
-    // Get _id from the params
     const employeeID = req.params._id;
-    console.log("🧠 Employee ID:", employeeID);
+    const { date } = req.query;
 
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
+    let startDate, endDate;
 
-    console.log("📅 Today Start:", todayStart);
-    console.log("📅 Today End:", todayEnd);
+    if (date) {
+      // Parse the provided date string (format: YYYY-MM-DD)
+      const selectedDate = new Date(date);
 
-    // Step 1: Find today's tasks
+      if (isNaN(selectedDate)) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid date format. Use YYYY-MM-DD.",
+        });
+      }
+
+      // Set time to start and end of the day
+      startDate = new Date(selectedDate);
+      startDate.setHours(0, 0, 0, 0);
+
+      endDate = new Date(selectedDate);
+      endDate.setHours(23, 59, 59, 999);
+    } else {
+      // Default to today
+      startDate = new Date();
+      startDate.setHours(0, 0, 0, 0);
+
+      endDate = new Date();
+      endDate.setHours(23, 59, 59, 999);
+    }
+
+    console.log("📅 Filtered Start:", startDate);
+    console.log("📅 Filtered End:", endDate);
+
+    // Step 1: Find tasks assigned to the employee within the date range
     const tasks = await Task.find({
       assignedTo: employeeID,
-      createdAt: { $gte: todayStart, $lte: todayEnd }
+      createdAt: { $gte: startDate, $lte: endDate },
     });
 
     console.log("✅ Tasks found:", tasks.length);
     if (tasks.length === 0) {
-      console.log("⚠️ No tasks found for today.");
+      console.log("⚠️ No tasks found for this date.");
     }
 
-    const taskID = tasks.map(task => task._id);
-    console.log("📌 Task IDs:", taskID);
+    const taskIDs = tasks.map((task) => task._id);
+    console.log("📌 Task IDs:", taskIDs);
 
-    // Step 2: Find leads linked to today's tasks
-    const leads = await Lead.find({ taskID: { $in: taskID } });
+    // Step 2: Find leads linked to these tasks
+    const leads = await Lead.find({ taskID: { $in: taskIDs } });
     console.log("📞 Leads found:", leads.length);
 
     res.json({
       success: true,
       data: {
         tasks,
-        leads
-      }
+        leads,
+      },
     });
-
   } catch (error) {
     console.error("❌ Error in getTodayTasks:", error);
     res.status(500).json({ success: false, error: error.message });
@@ -120,22 +141,20 @@ exports.getTodayTasks = async (req, res, next) => {
 
 // Get Task ID by id
 exports.getLeadsByTaskId = async (req, res) => {
-  const { id} = req.params;
+  const { id } = req.params;
 
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return res.status(400).json({ message: 'Invalid taskId' });
   }
 
   try {
-    const leads = await Lead.find({ taskID: id}).populate('taskID');
+    const leads = await Lead.find({ taskID: id }).populate('taskID');
     res.status(200).json(leads);
   } catch (error) {
     console.error('Error fetching leads by taskId:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 };
-
-
 
 
 exports.updateLead = async (req, res) => {
@@ -181,8 +200,8 @@ exports.updateLead = async (req, res) => {
 // Controller
 exports.updateTaskStatusAndRemark = async (req, res, next) => {
   try {
-   
-    const { Status, remark,taskId } = req.body;
+
+    const { Status, remark, taskId } = req.body;
 
     console.log("🛠️ Updating Task:", taskId);
     console.log("➡️ New Status:", Status);
@@ -214,23 +233,24 @@ exports.updateTaskStatusAndRemark = async (req, res, next) => {
 
 
 
-
-
-// lead ////////////////////////////////////////////////////////////////
-
-
 exports.createDealFromLead = async (req, res) => {
   try {
     const { leadID, value, assigned_leader, reminder } = req.body;
 
     if (!leadID || !assigned_leader) {
-      return res.status(400).json({ success: false, message: "leadID and assigned_leader are required" });
+      return res.status(400).json({
+        success: false,
+        message: "leadID and assigned_leader are required"
+      });
     }
 
     // 🔍 Fetch Lead
     const lead = await Lead.findById(leadID);
     if (!lead) {
-      return res.status(404).json({ success: false, message: "Lead not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Lead not found"
+      });
     }
 
     // ✅ Create Deal using Lead data
@@ -246,10 +266,21 @@ exports.createDealFromLead = async (req, res) => {
 
     await newDeal.save();
 
-    res.status(201).json({ success: true, message: "Deal created from Lead", data: newDeal });
+    // 🛠️ Update Lead status/result to 'Assigned'
+    lead.result = "Assigned"; // or whatever field/status you use
+    await lead.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Deal created and Lead marked as Assigned",
+      data: newDeal
+    });
   } catch (error) {
     console.error("🔥 Error in creating deal:", error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };
 
@@ -260,8 +291,8 @@ exports.getDealsByLeader = async (req, res) => {
     console.log("🔍 Fetching Deals for Leader:", leaderId);
 
     const deals = await Deal.find({ assigned_leader: leaderId })
-  .populate("lead")
-  .populate("assigned_employee", "name email profilePic");
+      .populate("lead")
+      .populate("assigned_employee", "name email profilePic");
 
 
     res.status(200).json({ success: true, data: deals });
@@ -275,15 +306,15 @@ exports.getDealsByLeader = async (req, res) => {
 
 exports.assignEmployeeToDeal = async (req, res) => {
   try {
-    const { dealID, assigned_employee ,deadline} = req.body;
+    const { dealID, assigned_employee, deadline } = req.body;
 
-    if (!dealID || !assigned_employee||!deadline) {
+    if (!dealID || !assigned_employee || !deadline) {
       return res.status(400).json({ success: false, message: "dealID and assigned_employee are required" });
     }
 
     const updatedDeal = await Deal.findByIdAndUpdate(
       dealID,
-      { assigned_employee ,deadline},
+      { assigned_employee, deadline },
       { new: true }
     );
 
@@ -298,30 +329,36 @@ exports.assignEmployeeToDeal = async (req, res) => {
   }
 };
 // employe dealssss  
+// getMyDeals.js
+
 exports.getMyDeals = async (req, res) => {
   try {
-    const employeeId = req.params.id;
+    const { id } = req.params; // employeeId from URL
+    const { startDate, endDate } = req.query;
 
-    console.log("🟡 [getMyDeals] Called");
-    console.log("📩 Received employeeId (string):", employeeId);
-    console.log("📦 typeof employeeId:", typeof employeeId);
-
-    // Check if it's a valid ObjectId
-    const isValidObjectId = mongoose.Types.ObjectId.isValid(employeeId);
-    console.log("✅ Is valid ObjectId:", isValidObjectId);
-
+    // Validate ObjectId
+    const isValidObjectId = mongoose.Types.ObjectId.isValid(id);
     if (!isValidObjectId) {
-      console.warn("❌ Invalid ObjectId format. Aborting...");
       return res.status(400).json({ success: false, message: "Invalid employee ID" });
     }
 
-    const employeeObjectId = mongoose.Types.ObjectId(employeeId);
-    console.log("🔁 Converted to ObjectId:", employeeObjectId);
+    const employeeObjectId = mongoose.Types.ObjectId(id);
+
+    // Build query object
+    const query = {
+      assigned_employee: employeeObjectId,
+    };
+
+    // Add date range filter if provided
+    if (startDate && endDate) {
+      query.createdAt = {
+        $gte: new Date(`${startDate}T00:00:00`),
+        $lte: new Date(`${endDate}T23:59:59`)
+      };
+    }
 
     // Query database
-    const deals = await Deal.find({
-      assigned_employee: employeeObjectId,
-    })
+    const deals = await Deal.find(query)
       .populate('lead')
       .populate('assigned_leader', 'name')
       .sort({ updatedAt: -1 });
@@ -331,7 +368,7 @@ exports.getMyDeals = async (req, res) => {
     if (deals.length === 0) {
       console.warn("⚠️ No deals found for this employee");
     } else {
-      console.log("✅ Deals found. First deal sample:", deals[0]);
+      console.log("✅ Deals fetched successfully. First deal sample:", deals[0]);
     }
 
     res.json({ success: true, data: deals });
@@ -351,7 +388,7 @@ exports.updateDealStage = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Deal ID and new stage are required' });
     }
 
-    const allowedStages = ['untouched', 'next_meeting', 'quotation', 'won','Loss'];
+    const allowedStages = ['untouched', 'next_meeting', 'quotation', 'won', 'Loss'];
     if (!allowedStages.includes(newStage)) {
       return res.status(400).json({ success: false, message: 'Invalid stage value' });
     }
@@ -368,14 +405,10 @@ exports.updateDealStage = async (req, res) => {
 
     res.json({ success: true, data: updated });
   } catch (err) {
-    console.error('🔥 Error in updateDealStage:', err);
     res.status(500).json({ success: false, message: err.message });
   }
-}; 
+};
 
-
-
-// for sales leader 
 exports.getSalesLeaders = async (req, res) => {
   try {
     const salesLeaders = await User.find({ type: 'leader' }).select('_id name email');
@@ -388,7 +421,8 @@ exports.getSalesLeaders = async (req, res) => {
 // for sales leader 
 exports.getEmployee = async (req, res) => {
   try {
-    const salesLeaders = await User.find({ type: 'employee' }).select('_id name email');
+    const { type } = req.query;
+    const salesLeaders = await User.find({ type: 'employee', branch: type == 'employee' && { $in: ['tech', 'telecaller'] } }).select('_id name email');
     res.status(200).json({ success: true, data: salesLeaders });
   } catch (error) {
     console.error('❌ Error fetching sales leaders:', error);
@@ -416,7 +450,7 @@ exports.getTodayMeetingsByEmployee = async (req, res) => {
     // Fetch meetings for the given employee that are scheduled for today
     const meetings = await Meeting.find({
       employeeId: mongoose.Types.ObjectId(id), // Ensure correct field name (`employeeId`)
-      startDate: { 
+      startDate: {
         $gte: startOfDay.toISOString(),  // Start of the day in ISO format
         $lte: endOfDay.toISOString()    // End of the day in ISO format
       }
@@ -549,6 +583,43 @@ exports.getEventsByDate = async (req, res) => {
   } catch (error) {
     console.error("❌ Error fetching events by date:", error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+exports.getFilteredDeals = async (req, res) => {
+  try {
+    const { assigned_leader, assigned_employee, status } = req.query;
+
+    const query = {};
+
+    if (assigned_leader && mongoose.Types.ObjectId.isValid(assigned_leader)) {
+      query.assigned_leader = new mongoose.Types.ObjectId(assigned_leader);
+    }
+
+    if (assigned_employee && mongoose.Types.ObjectId.isValid(assigned_employee)) {
+      query.assigned_employee = new mongoose.Types.ObjectId(assigned_employee);
+    }
+    const validStatuses = ['untouched', 'next_meeting', 'quotation', 'won', 'Loss'];
+    if (status && validStatuses.includes(status)) {
+      query.status = status;
+    } else if (!status) {
+      query.status = 'won';
+    }
+    query.createdAt = {
+      $gte: new Date(new Date() - 30 * 24 * 60 * 60 * 1000), // Last 30 days
+    };
+
+    const deals = await Deal.find(query)
+      .populate('lead')
+      .populate('assigned_leader', 'name email')
+      .populate('assigned_employee', 'name email')
+      .sort({ createdAt: -1 });
+
+    res.json({ success: true, data: deals });
+  } catch (err) {
+    console.error('🔥 Error fetching filtered deals:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
